@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seatwork — a seating chart your agent can rearrange</title>
+<meta name="description" content="A classroom seating chart that exposes its own verbs to an AI agent through WebMCP. Say the constraints out loud; drag to fix what the agent got wrong.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%231d2a31'/%3E%3Cg fill='none' stroke='%23fffaf2' stroke-width='4'%3E%3Crect x='12' y='16' width='18' height='14'/%3E%3Crect x='34' y='16' width='18' height='14'/%3E%3Crect x='12' y='36' width='18' height='14'/%3E%3Crect x='34' y='36' width='18' height='14'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">
+        <b>Seatwork</b>
+        <i>a seating chart you can talk to</i>
+      </span>
+    </div>
+
+    <label class="title-field">
+      <span class="sr-only">Chart title</span>
+      <input id="chart-title" value="Period 3 — Biology" maxlength="60" spellcheck="false">
+    </label>
+
+    <div class="agent-badge" id="agent-badge" data-state="off">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="agent-badge-text">WebMCP: checking…</span>
+    </div>
+
+    <div class="topbar-actions">
+      <button type="button" id="btn-arrange" class="btn btn-primary">Auto-arrange</button>
+      <button type="button" id="btn-undo" class="btn">Undo</button>
+      <button type="button" id="btn-print" class="btn">Print</button>
+    </div>
+  </header>
+
+  <main class="grid">
+
+    <!-- ── LEFT: roster ─────────────────────────────────────────── -->
+    <section class="panel panel-roster" aria-labelledby="h-roster">
+      <div class="panel-head">
+        <h2 id="h-roster">Roster</h2>
+        <span class="count" id="roster-count"></span>
+      </div>
+
+      <div class="bench" id="bench" aria-label="Unseated students">
+        <p class="bench-empty" id="bench-empty">Everyone has a seat.</p>
+      </div>
+
+      <p class="legend"><span><b class="trait" data-t="emerging">E</b>emerging</span><span><b class="trait" data-t="secure">S</b>secure</span><span><b class="trait" data-t="extending">X</b>extending</span><span><b class="trait" data-t="multilingual">M</b>multilingual</span><span><b class="trait" data-t="front">F</b>front row</span><span><b class="trait" data-t="lowdistraction">L</b>low distraction</span></p>
+      <div class="panel-head panel-head-sub">
+        <h3>Add a student</h3>
+      </div>
+
+      <!-- Declarative WebMCP: this form is a tool with no JavaScript wiring.
+           An agent reads toolname/tooldescription/toolparamdescription straight
+           off the markup. -->
+      <form id="add-student-form"
+            class="stack"
+            toolname="add_student"
+            tooldescription="Add one student to the class roster with optional traits. Use this before seating anyone new."
+            toolautosubmit>
+        <label class="field">
+          <span>Name</span>
+          <input name="name" required maxlength="40" placeholder="Ada Okonkwo"
+                 toolparamdescription="The student's full name as it should appear on the chart.">
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Reading</span>
+            <select name="reading" toolparamdescription="Reading level band: emerging, secure, or extending.">
+              <option value="secure">secure</option>
+              <option value="emerging">emerging</option>
+              <option value="extending">extending</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Support</span>
+            <select name="support" toolparamdescription="Support flag: none, multilingual learner, front-row accommodation, or needs low-distraction seat.">
+              <option value="none">none</option>
+              <option value="multilingual">multilingual</option>
+              <option value="front">front row</option>
+              <option value="lowdistraction">low distraction</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit" class="btn">Add to roster</button>
+      </form>
+    </section>
+
+    <!-- ── CENTER: the room ─────────────────────────────────────── -->
+    <section class="panel panel-room" aria-labelledby="h-room">
+      <div class="panel-head">
+        <h2 id="h-room">Room</h2>
+        <div class="room-controls">
+          <label class="inline-field">
+            <span>Tables</span>
+            <input type="number" id="table-count" min="1" max="12" step="1" value="6">
+          </label>
+          <label class="inline-field">
+            <span>Seats each</span>
+            <input type="number" id="table-capacity" min="1" max="8" step="1" value="4">
+          </label>
+        </div>
+      </div>
+
+      <div class="front-band">front of room · board</div>
+      <div class="room" id="room"></div>
+      <p class="room-hint">Drag any student between seats. The agent sees every move you make.</p>
+    </section>
+
+    <!-- ── RIGHT: constraints + what happened ───────────────────── -->
+    <section class="panel panel-side" aria-labelledby="h-rules">
+      <div class="panel-head">
+        <h2 id="h-rules">Rules</h2>
+        <span class="count" id="rules-count"></span>
+      </div>
+      <ul class="rules" id="rules"></ul>
+      <p class="rules-empty" id="rules-empty">No rules yet. Ask the agent for one, or add it below.</p>
+
+      <form id="add-rule-form" class="stack stack-tight">
+        <div class="field-row">
+          <label class="field">
+            <span>Rule</span>
+            <select id="rule-type">
+              <option value="apart">keep apart</option>
+              <option value="together">seat together</option>
+              <option value="front">seat near front</option>
+              <option value="spread">spread evenly by trait</option>
+            </select>
+          </label>
+        </div>
+        <div class="field-row" id="rule-operands"></div>
+        <button type="submit" class="btn">Add rule</button>
+      </form>
+
+      <div class="panel-head panel-head-sub">
+        <h3>Conflicts</h3>
+        <span class="count" id="violation-count"></span>
+      </div>
+      <ul class="violations" id="violations"></ul>
+      <p class="violations-ok" id="violations-ok">Every rule is satisfied.</p>
+
+      <div class="panel-head panel-head-sub">
+        <h3>Activity</h3>
+      </div>
+      <ol class="log" id="log" aria-live="polite"></ol>
+    </section>
+
+  </main>
+</div>
+
+
+<script type="module" src="app.js"></script>
+<script type="module" src="webmcp.js"></script>
+<script type="module">
+  // /?selftest runs the WebMCP layer against itself. See selftest.js.
+  if (new URLSearchParams(location.search).has("selftest")) import("./selftest.js");
+</script>
+</body>
+</html>

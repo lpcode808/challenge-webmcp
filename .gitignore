@@ -1,0 +1,16 @@
+# Private working notes — never published. Listed here from the first commit,
+# so nothing in _dev/ has ever entered git history.
+_dev/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Node
+node_modules/
+dist/
+.env
+.env.*
