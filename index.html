@@ -28,6 +28,8 @@
       <input id="chart-title" value="Period 3 — Biology" maxlength="60" spellcheck="false">
     </label>
 
+    <span class="demo-chip" id="demo-chip" hidden>Demo class · fictional students</span>
+
     <div class="agent-badge" id="agent-badge" data-state="off">
       <span class="dot" aria-hidden="true"></span>
       <span id="agent-badge-text">WebMCP: checking…</span>
@@ -90,8 +92,25 @@
             </select>
           </label>
         </div>
-        <button type="submit" class="btn">Add to roster</button>
+        <button type="submit" class="btn">Add one</button>
       </form>
+
+      <!-- Parity check: the agent gets an import_roster tool, so the teacher gets
+           a paste box. Any verb only one of them can reach is a design bug. -->
+      <details class="disclosure">
+        <summary>Paste a class list</summary>
+        <div class="stack stack-tight">
+          <label class="field">
+            <span>One per line — <code>Name</code> or <code>Name | reading | support</code></span>
+            <textarea id="import-text" rows="5" spellcheck="false"
+                      placeholder="Ada Okonkwo | extending | none&#10;Bennett Cruz | secure | lowdistraction&#10;Cheyenne Nakata"></textarea>
+          </label>
+          <div class="field-row">
+            <button type="button" id="btn-import" class="btn">Add all</button>
+            <button type="button" id="btn-reset-demo" class="btn">Reset to demo</button>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- ── CENTER: the room ─────────────────────────────────────── -->

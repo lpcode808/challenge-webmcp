@@ -75,6 +75,28 @@ function ruleText(r) {
   return r.type;
 }
 
+// Is this one rule currently broken? The single source of truth for that question.
+// evaluate(), conflictedIds() and explainSeat() all defer to it, so the chip badges,
+// the Conflicts panel and the agent's explanation can never disagree with each other.
+// Only the pairwise rules are decidable per-rule; `spread` is a distribution and is
+// judged table by table inside evaluate().
+function isBroken(r) {
+  if (r.type === 'apart') {
+    const ta = tableOf(r.a), tb = tableOf(r.b);
+    return !!(ta && tb && ta.id === tb.id);
+  }
+  if (r.type === 'together') {
+    const ta = tableOf(r.a), tb = tableOf(r.b);
+    return !ta || !tb || ta.id !== tb.id;
+  }
+  if (r.type === 'front') {
+    const t = tableOf(r.a);
+    return !t || rowOf(t) !== 0;
+  }
+  if (r.type === 'spread') return evaluate().violations.some((v) => v.includes(`" ${r.trait}`));
+  return false;
+}
+
 // Returns { score, violations: [text] }. Lower score is better; 0 is perfect.
 function evaluate() {
   let score = 0;
@@ -82,20 +104,17 @@ function evaluate() {
 
   for (const r of state.rules) {
     if (r.type === 'apart') {
-      const ta = tableOf(r.a), tb = tableOf(r.b);
-      if (ta && tb && ta.id === tb.id) {
+      if (isBroken(r)) {
         score += RULE_WEIGHT.apart;
-        violations.push(`${byId(r.a).name} and ${byId(r.b).name} are both at ${ta.label}.`);
+        violations.push(`${byId(r.a).name} and ${byId(r.b).name} are both at ${tableOf(r.a).label}.`);
       }
     } else if (r.type === 'together') {
-      const ta = tableOf(r.a), tb = tableOf(r.b);
-      if (!ta || !tb || ta.id !== tb.id) {
+      if (isBroken(r)) {
         score += RULE_WEIGHT.together;
         violations.push(`${byId(r.a).name} and ${byId(r.b).name} are not at the same table.`);
       }
     } else if (r.type === 'front') {
-      const t = tableOf(r.a);
-      if (!t || rowOf(t) !== 0) {
+      if (isBroken(r)) {
         score += RULE_WEIGHT.front;
         violations.push(`${byId(r.a).name} is not in the front row.`);
       }
@@ -130,16 +149,9 @@ function evaluate() {
 function conflictedIds() {
   const out = new Set();
   for (const r of state.rules) {
-    if (r.type === 'apart') {
-      const ta = tableOf(r.a), tb = tableOf(r.b);
-      if (ta && tb && ta.id === tb.id) { out.add(r.a); out.add(r.b); }
-    } else if (r.type === 'together') {
-      const ta = tableOf(r.a), tb = tableOf(r.b);
-      if (!ta || !tb || ta.id !== tb.id) { out.add(r.a); out.add(r.b); }
-    } else if (r.type === 'front') {
-      const t = tableOf(r.a);
-      if (!t || rowOf(t) !== 0) out.add(r.a);
-    }
+    if (r.type === 'spread' || !isBroken(r)) continue;
+    if (r.a) out.add(r.a);
+    if (r.b) out.add(r.b);
   }
   return out;
 }
@@ -285,6 +297,35 @@ export const COMMANDS = {
     return `Added ${name} (${reading} reading, ${support} support). They are unseated.`;
   },
 
+  // The one verb that is genuinely easier to say than to click. A teacher has the
+  // class list in an email or a spreadsheet column; adding thirty students one form
+  // at a time is the reason nobody adopts tools like this.
+  importRoster({ text, replace = false }, source = 'you') {
+    const lines = String(text || '').split(/[\n\r]+/).map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) throw new Error('Nothing to import — give me one student per line.');
+    if (lines.length > 60) throw new Error(`That is ${lines.length} lines; 60 is the ceiling for one class.`);
+
+    checkpoint();
+    if (replace) { state.students = []; state.rules = []; state.tables.forEach((t) => t.seats = t.seats.map(() => null)); }
+
+    const added = [], skipped = [];
+    for (const line of lines) {
+      const [rawName, rawReading, rawSupport] = line.split('|').map((p) => p.trim());
+      const name = (rawName || '').slice(0, 40);
+      if (!name) continue;
+      if (state.students.some((s) => s.name.toLowerCase() === name.toLowerCase())) { skipped.push(name); continue; }
+      const reading = READING_LEVELS.includes(rawReading) ? rawReading : 'secure';
+      const support = SUPPORT_FLAGS.includes(rawSupport) ? rawSupport : 'none';
+      state.students.push({ id: nextId('s'), name, reading, support });
+      added.push(name);
+    }
+    note(source, `imported ${added.length} student${added.length === 1 ? '' : 's'}`);
+    flashIds = state.students.filter((s) => added.includes(s.name)).map((s) => s.id);
+    render();
+    return `Added ${added.length} student(s). ${skipped.length ? `Skipped ${skipped.length} already on the roster: ${skipped.slice(0, 5).join(', ')}. ` : ''}`
+      + `Roster is now ${state.students.length}, with ${unseated().length} unseated — call auto_arrange to seat them.`;
+  },
+
   setTables({ count, capacity }, source = 'you') {
     count = Math.max(1, Math.min(12, Number(count) || state.tables.length || 6));
     capacity = Math.max(1, Math.min(8, Number(capacity) || state.tables[0]?.capacity || 4));
@@ -320,12 +361,25 @@ export const COMMANDS = {
     const prev = tableOf(s.id);
     if (prev) prev.seats[prev.seats.indexOf(s.id)] = null;
     t.seats[idx] = s.id;
-    if (displaced && displaced !== s.id && prev) prev.seats[prev.seats.indexOf(null)] = displaced;
+
+    // The occupant can only take the incoming student's old seat if there was one.
+    // When the incoming student comes off the bench there is nowhere to put the
+    // occupant, so they go to the bench — and the agent has to be told that, or it
+    // will report a swap that did not happen and act on its own false memory.
+    let moved = null;
+    if (displaced && displaced !== s.id) {
+      if (prev) { prev.seats[prev.seats.indexOf(null)] = displaced; moved = prev; }
+    }
     note(source, `seated ${s.name} at ${t.label}`);
     flashIds = [s.id, displaced].filter(Boolean);
     render();
-    return `${s.name} is at ${t.label}, seat ${idx + 1}.`
-      + (displaced && displaced !== s.id ? ` ${byId(displaced).name} moved to make room.` : '');
+    let tail = '';
+    if (displaced && displaced !== s.id) {
+      tail = moved
+        ? ` ${byId(displaced).name} moved to ${moved.label}.`
+        : ` ${byId(displaced).name} is now on the bench — there was no seat to trade.`;
+    }
+    return `${s.name} is at ${t.label}, seat ${idx + 1}.` + tail;
   },
 
   swapStudents({ a, b }, source = 'you') {
@@ -413,12 +467,11 @@ export const COMMANDS = {
     const where = t ? `${s.name} is at ${t.label} (${rowOf(t) === 0 ? 'front row' : `row ${rowOf(t) + 1}`}).` : `${s.name} is unseated.`;
     const mine = state.rules.filter((r) => r.a === s.id || r.b === s.id);
     if (!mine.length) return `${where} No rule mentions them, so the solver placed them to balance the room.`;
-    const { violations } = evaluate();
-    const lines = mine.map((r) => {
-      const txt = ruleText(r);
-      const broken = violations.some((v) => v.includes(s.name));
-      return `${txt} — ${broken ? 'currently broken' : 'satisfied'}`;
-    });
+    // Ask each rule about itself. Matching the student's name against the global
+    // violation list marks every rule they appear in as broken the moment any one
+    // of them is — which is how this tool spent its first day confidently telling
+    // a teacher that a satisfied front-row rule was broken.
+    const lines = mine.map((r) => `${ruleText(r)} — ${isBroken(r) ? 'currently broken' : 'satisfied'}`);
     return `${where} Rules touching them: ${lines.join('; ')}.`;
   },
 
@@ -454,6 +507,9 @@ function chip(s, conflicted) {
   const el = document.createElement('div');
   el.className = 'chip' + (conflicted.has(s.id) ? ' conflict' : '') + (flashIds.includes(s.id) ? ' flash' : '');
   el.draggable = true;
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  if (carrying === s.id) el.setAttribute('aria-grabbed', 'true');
   el.dataset.sid = s.id;
   el.title = `${s.name} — ${s.reading} reading${s.support !== 'none' ? `, ${s.support}` : ''}`;
 
@@ -552,7 +608,9 @@ function render() {
   });
 
   $('btn-undo').disabled = !history.length;
+  $('demo-chip').hidden = !isDemoRoster();
   refreshRuleOperands();
+  persist();
   flashIds = [];
   document.dispatchEvent(new CustomEvent('seatwork:change'));
 }
@@ -632,8 +690,14 @@ function guard(fn) {
 $('btn-arrange').onclick = () => guard(() => COMMANDS.autoArrange({}, 'you'));
 $('btn-undo').onclick = () => guard(() => COMMANDS.undo({}, 'you'));
 $('btn-print').onclick = () => window.print();
-$('chart-title').oninput = (e) => { state.title = e.target.value; };
+$('chart-title').oninput = (e) => { state.title = e.target.value; persist(); };
 $('rule-type').onchange = () => { $('rule-operands').dataset.shape = ''; refreshRuleOperands(); };
+$('btn-import').onclick = () => guard(() => {
+  const msg = COMMANDS.importRoster({ text: $('import-text').value }, 'you');
+  $('import-text').value = '';
+  return msg;
+});
+$('btn-reset-demo').onclick = () => guard(() => COMMANDS.resetToDemo({}, 'you'));
 
 ['table-count', 'table-capacity'].forEach((id) => {
   $(id).onchange = () => guard(() => COMMANDS.setTables({ count: Number($('table-count').value), capacity: Number($('table-capacity').value) }, 'you'));
@@ -641,15 +705,37 @@ $('rule-type').onchange = () => { $('rule-operands').dataset.shape = ''; refresh
 
 // The declarative WebMCP form. A human submits it by clicking; an agent submits it
 // by calling the `add_student` tool the markup declares. Same handler, same result.
+//
+// Two details the declarative API gives you that are easy to miss, and that this
+// handler got wrong until a probe caught it:
+//
+//   e.agentInvoked  — true when the submit came from a tool call rather than a
+//                     click. It is the only honest way to attribute the change.
+//   e.respondWith() — hands the agent a result. Without it the agent gets nothing
+//                     back, so it cannot tell you what it just did.
+//
+// And one trap: form.reset() during a tool-invoked submit aborts the execution.
+// The write still lands, but the agent is told "Tool execution cancelled by a form
+// reset" — a silent success reported as a failure, which makes an agent retry and
+// then trip the duplicate-name guard. Clear the fields only for a human.
 $('add-student-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const source = e.target.dataset.agentSubmit === '1' ? 'agent' : 'you';
-  delete e.target.dataset.agentSubmit;
-  guard(() => COMMANDS.addStudent({
-    name: f.get('name'), reading: f.get('reading'), support: f.get('support')
-  }, source));
-  e.target.reset();
+  const fromAgent = e.agentInvoked === true;
+
+  let message;
+  try {
+    message = COMMANDS.addStudent({
+      name: f.get('name'), reading: f.get('reading'), support: f.get('support')
+    }, fromAgent ? 'agent' : 'you');
+  } catch (err) {
+    message = `Could not do that: ${err.message}`;
+    note(fromAgent ? 'agent' : 'you', `couldn't add that student — ${err.message}`);
+    render();
+  }
+
+  if (fromAgent) e.respondWith?.(Promise.resolve(message));
+  else e.target.reset();
 });
 
 $('add-rule-form').addEventListener('submit', (e) => {
@@ -659,12 +745,128 @@ $('add-rule-form').addEventListener('submit', (e) => {
   guard(() => COMMANDS.addRule({ type, a: pick('a'), b: pick('b'), trait: pick('trait') }, 'you'));
 });
 
+/* ── keyboard path for moving a student ─────────────────────────── */
+// HTML5 drag events never fire on touch, and a chart whose subject is seating
+// accommodations should not be unusable on the tablet half the school runs on.
+// Enter picks a student up, arrows walk the seats, Enter puts them down, Escape
+// cancels. Same COMMANDS calls the mouse makes.
+
+let carrying = null;
+
+function seatList() {
+  return [...document.querySelectorAll('.seat')];
+}
+
+function highlight(i) {
+  seatList().forEach((s, n) => s.classList.toggle('keyboard-target', n === i));
+}
+
+let cursor = 0;
+
+document.addEventListener('keydown', (e) => {
+  const chip = e.target.closest?.('.chip');
+
+  if (!carrying && chip && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    carrying = chip.dataset.sid;
+    chip.setAttribute('aria-grabbed', 'true');
+    const seats = seatList();
+    cursor = Math.max(0, seats.findIndex((s) => s.contains(chip)));
+    highlight(cursor);
+    note('you', `picked up ${byId(carrying).name} — arrows to choose a seat, Enter to place`);
+    render();
+    return;
+  }
+
+  if (!carrying) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    carrying = null; highlight(-1); render();
+    return;
+  }
+  if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(e.key)) {
+    e.preventDefault();
+    const seats = seatList();
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
+    cursor = (cursor + step + seats.length) % seats.length;
+    highlight(cursor);
+    seats[cursor].scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    const target = seatList()[cursor];
+    const held = carrying;
+    carrying = null;
+    if (target) {
+      guard(() => COMMANDS.assignStudent(
+        { student: held, table: target.dataset.table, seat: Number(target.dataset.seat) + 1 }, 'you'));
+    }
+    highlight(-1);
+  }
+});
+
+/* ── persistence ────────────────────────────────────────────────── */
+// Local only. The roster never goes anywhere — that is the point of the design,
+// not a limitation of it.
+
+const STORAGE_KEY = 'seatwork:chart:v1';
+
+function persist() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      title: state.title, students: state.students, tables: state.tables, rules: state.rules, uid
+    }));
+  } catch { /* private window, or storage disabled. The chart still works. */ }
+}
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const p = JSON.parse(raw);
+    if (!Array.isArray(p.students) || !Array.isArray(p.tables)) return false;
+    state.title = p.title || state.title;
+    state.students = p.students;
+    state.tables = p.tables;
+    state.rules = p.rules || [];
+    uid = Number(p.uid) || state.students.length + state.tables.length + 10;
+    return true;
+  } catch { return false; }
+}
+
+// True only while the roster is exactly the bundled demo. Once anyone edits it,
+// the "fictional students" chip stops being a true statement, so it goes away.
+function isDemoRoster() {
+  if (state.students.length !== DEMO_ROSTER.length) return false;
+  const mine = state.students.map((s) => s.name).sort().join('|');
+  return mine === DEMO_ROSTER.map((s) => s.name).sort().join('|');
+}
+
+function seedDemo() {
+  state.students = [];
+  DEMO_ROSTER.forEach((r) => state.students.push({ id: nextId('s'), name: r.name, reading: r.reading, support: r.support }));
+  COMMANDS.setTables({ count: 6, capacity: 4 }, 'you');
+  COMMANDS.addRule({ type: 'spread', trait: 'reading' }, 'you');
+  COMMANDS.autoArrange({ seed: 7 }, 'you');
+}
+
+COMMANDS.resetToDemo = function (_ = {}, source = 'you') {
+  checkpoint();
+  state.rules = [];
+  seedDemo();
+  note(source, 'reset to the demo class');
+  render();
+  return 'Chart reset to the bundled demo class of 24 fictional students.';
+};
+
 /* ── boot ───────────────────────────────────────────────────────── */
 
-DEMO_ROSTER.forEach((r) => state.students.push({ id: nextId('s'), name: r.name, reading: r.reading, support: r.support }));
-COMMANDS.setTables({ count: 6, capacity: 4 }, 'you');
-COMMANDS.addRule({ type: 'spread', trait: 'reading' }, 'you');
-COMMANDS.autoArrange({ seed: 7 }, 'you');
+if (!loadSaved()) seedDemo();
+$('chart-title').value = state.title;
+$('table-count').value = state.tables.length || 6;
+$('table-capacity').value = state.tables[0]?.capacity || 4;
 state.log.length = 0;
 note('you', 'opened the chart');
 history = [];

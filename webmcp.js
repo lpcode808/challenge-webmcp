@@ -187,6 +187,27 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
     annotations: READ,
     run: () => COMMANDS.exportChart()
+  },
+  {
+    name: 'import_roster',
+    description: 'Add a whole class at once from pasted text, one student per line as "Name" or "Name | reading | support". Duplicates are skipped, not overwritten. This is the fast path when a teacher has a class list in an email or a spreadsheet column — use it instead of calling add_student thirty times.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The class list. One student per line; pipes separate optional reading band and support flag.' },
+        replace: { type: 'boolean', description: 'True to clear the existing roster and rules first. Defaults to false, which appends.' }
+      },
+      required: ['text']
+    },
+    annotations: WRITE,
+    run: (i) => COMMANDS.importRoster(i, 'agent')
+  },
+  {
+    name: 'reset_chart',
+    description: 'Discard the current chart and restore the bundled demo class of 24 fictional students. Destructive — confirm with the teacher before calling it, and say that Undo will not bring a hand-built roster back once the page is reloaded.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: WRITE,
+    run: () => COMMANDS.resetToDemo({}, 'agent')
   }
 ];
 
@@ -238,28 +259,43 @@ function syncUndoTool() {
     // executions on unregister; until that is everywhere, let the call return first.
     const dying = undoAbort;
     undoAbort = null;
-    setTimeout(() => dying.abort(), 0);
+    // Re-check on the way out. If history reappeared during the deferral, a new
+    // controller is already live and this abort would tear down the wrong tool.
+    setTimeout(() => { if (undoAbort === null) dying.abort(); refreshBadge(); }, 0);
   }
+  refreshBadge();
 }
 
 document.addEventListener('seatwork:change', syncUndoTool);
-syncUndoTool();
 
 /* ── tell the teacher whether an agent can actually reach this page ── */
 
 const badge = document.getElementById('agent-badge');
 const badgeText = document.getElementById('agent-badge-text');
 
+// The count is live, not a constant. Watching it tick as undo_last comes and goes
+// is the fastest way to see that the tool list tracks application state.
+async function refreshBadge() {
+  if (!mc) return;
+  try {
+    const n = (await mc.getTools()).length;
+    badgeText.textContent = `WebMCP ready · ${n} tools`;
+  } catch { /* leave the last good count up */ }
+}
+
 if (mc) {
   badge.dataset.state = 'on';
   const surface = globalThis.document?.modelContext ? 'document' : 'navigator';
-  badgeText.textContent = `WebMCP ready · ${TOOLS.length + 1} tools`;
+  badgeText.textContent = `WebMCP ready · ${TOOLS.length} tools`;
   badge.title = `Tools are registered on ${surface}.modelContext. Ask your agent to rearrange the room.`;
+  refreshBadge();
 } else {
   badge.dataset.state = 'off';
   badgeText.textContent = 'WebMCP off — chart still works';
   badge.title = 'Open in ChatGPT’s browser, or Chrome 149+ with chrome://flags/#enable-webmcp-testing.';
 }
+
+syncUndoTool();
 
 // Exposed so the demo video (and anyone reading the repo) can list and call the
 // exact tools an agent sees, from the console, with no agent attached:

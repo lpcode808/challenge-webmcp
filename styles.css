@@ -321,3 +321,38 @@ body {
 }
 .legend span { display: inline-flex; align-items: center; gap: .3rem; }
 .legend .trait { font-weight: 500; }
+
+/* Says out loud what a code comment cannot: nobody in this roster is real.
+   Hides itself the moment the roster stops being the bundled demo. */
+.demo-chip {
+  font-size: .6875rem; letter-spacing: .02em; white-space: nowrap;
+  padding: var(--s1) var(--s3);
+  color: var(--brick); background: var(--brick-wash);
+  border: 1px solid #e6c9bc; border-radius: 999px;
+}
+
+/* Keyboard path for moving a student, because drag events do not fire on touch
+   and a chart about accommodations that only works with a mouse is a bad joke. */
+.chip:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.chip[aria-grabbed="true"] { border-color: var(--teal); background: var(--teal-wash); border-style: solid; }
+.seat.keyboard-target { border-color: var(--teal); border-style: solid; }
+
+/* paste-a-class-list disclosure */
+.disclosure { margin-top: var(--s3); border-top: 1px solid var(--rule); padding-top: var(--s3); }
+.disclosure summary {
+  font-size: .6875rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--ink-soft); cursor: pointer; list-style: none;
+}
+.disclosure summary::before { content: "+ "; font-family: var(--mono); }
+.disclosure[open] summary::before { content: "− "; }
+.disclosure summary::-webkit-details-marker { display: none; }
+.disclosure summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.disclosure > div { margin-top: var(--s3); }
+.disclosure .field > span { text-transform: none; letter-spacing: 0; font-size: .6875rem; }
+.disclosure code { font-family: var(--mono); font-size: .625rem; color: var(--ink-soft); }
+#import-text {
+  font-family: var(--mono); font-size: .75rem; line-height: 1.5; color: var(--ink);
+  padding: .4rem .5rem; background: var(--paper);
+  border: 1px solid var(--rule-firm); border-radius: 3px; resize: vertical; width: 100%;
+}
+#import-text:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
